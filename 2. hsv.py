@@ -4,10 +4,11 @@ import glob
 
 path = 'C:\\Users\\Lab\\Desktop\\megakaryocytes\\data'
 # path = 'E:/DataSetMegakaryocytes/15_1013_HE_1/'
+# path = 'E:/DataSetMegakaryocytes/12_60_AE_1 меги+/'
 
 
 lower_hsv = np.array([20, 54, 0])
-upper_hsv = np.array([179, 255, 255])
+upper_hsv = np.array([150, 255, 236])
 
 for file_path in glob.glob(path + '/*.png'):
     image = cv2.imread(file_path)
@@ -21,8 +22,8 @@ for file_path in glob.glob(path + '/*.png'):
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=3)
     mask = cv2.morphologyEx(mask, cv2.MORPH_ERODE, kernel, iterations=2)
 
-    cv2.imshow('mask', mask)
-    cv2.waitKey(0)
+    # cv2.imshow('mask', mask)
+    # cv2.waitKey(0)
 
     contours, _ = cv2.findContours(mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
 
