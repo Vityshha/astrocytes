@@ -34,6 +34,11 @@ MANIFEST
 *.manifest
 *.spec
 
+*.png
+*.jpg
+*.tar
+*.safetensors
+
 # Installer logs
 pip-log.txt
 pip-delete-this-directory.txt
