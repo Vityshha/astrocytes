@@ -38,6 +38,7 @@ MANIFEST
 *.jpg
 *.tar
 *.safetensors
+*.txt
 
 # Installer logs
 pip-log.txt

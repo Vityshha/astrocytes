@@ -5,8 +5,9 @@ from model import UNET
 from utils import load_checkpoint, get_val_loader
 import matplotlib.pyplot as plt
 import numpy as np
-from PIL import Image
+from tqdm import tqdm
 import cv2
+import os
 
 # Hyperparameters
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -16,9 +17,12 @@ doorstep = 0.2
 VAL_IMG_DIR = "data/val_images/"
 VAL_MASK_DIR = "data/val_masks/"
 
-# Загрузка модели
+MODEL_EPOCH = '21'
+SAVE_PATH = f'results/{MODEL_EPOCH}_doorstep-{doorstep}'
+os.makedirs(SAVE_PATH, exist_ok=True)
+
 model = UNET(in_channels=3, out_channels=1).to(DEVICE)
-load_checkpoint(torch.load("saved_models/my_checkpoint.pth.tar"), model)
+load_checkpoint(torch.load(f"saved_models/my_checkpoint_{MODEL_EPOCH}.pth.tar", map_location=DEVICE), model)
 model.eval()
 
 # Трансформации для валидационных изображений
@@ -57,7 +61,7 @@ def overlay_mask(image, mask, alpha=0.5):
 
 
 # Проход по валидационным данным
-for idx, (data, _) in enumerate(val_loader):
+for idx, (data, _) in enumerate(tqdm(val_loader)):
     data = data.to(DEVICE)
     with torch.no_grad():
         preds = torch.sigmoid(model(data))
@@ -72,10 +76,8 @@ for idx, (data, _) in enumerate(val_loader):
         original_image = (original_image * 255).astype(np.uint8)
         original_image = cv2.cvtColor(original_image, cv2.COLOR_BGR2RGB)
 
-        # Преобразование результата в RGB
         result = cv2.cvtColor(result, cv2.COLOR_BGR2RGB)
 
-        # Создание фигуры для отображения двух изображений рядом
         fig, axes = plt.subplots(1, 2, figsize=(10, 5))
         axes[0].imshow(original_image)
         axes[0].set_title("Original Image")
@@ -85,8 +87,7 @@ for idx, (data, _) in enumerate(val_loader):
         axes[1].set_title("Image with Mask")
         axes[1].axis("off")
 
-        # Сохранение результата
-        plt.savefig(f"results/result_{idx}.png", bbox_inches="tight", pad_inches=0)
+        plt.savefig(f"{SAVE_PATH}/result_{idx}.png", bbox_inches="tight", pad_inches=0)
         plt.show()
     except:
         pass
