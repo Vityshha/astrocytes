@@ -13,11 +13,11 @@ import os
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 IMAGE_HEIGHT = 720
 IMAGE_WIDTH = 720
-doorstep = 0.2
+doorstep = 0.7
 VAL_IMG_DIR = "data/val_images/"
 VAL_MASK_DIR = "data/val_masks/"
 
-MODEL_EPOCH = '21'
+MODEL_EPOCH = '41'
 SAVE_PATH = f'results/{MODEL_EPOCH}_doorstep-{doorstep}'
 os.makedirs(SAVE_PATH, exist_ok=True)
 

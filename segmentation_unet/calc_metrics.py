@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 
 
 '''
-Лучшая эпоха: 47 (максимальные IoU и Dice, сбалансированные Precision и Recall, низкие потери).
+Лучшая эпоха: 47 (46 модель) (максимальные IoU и Dice, сбалансированные Precision и Recall, низкие потери).
 '''
 
 def parse_logs(log_file):
