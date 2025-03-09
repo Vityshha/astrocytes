@@ -6,182 +6,202 @@ from PIL import Image
 from model import UNET
 import albumentations as A
 from skimage import morphology
+from matplotlib import pyplot as plt
 from utils import load_checkpoint
 from albumentations.pytorch import ToTensorV2
+from skimage.segmentation import flood_fill
 
-DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+class ImageProcessor:
+    def __init__(self, model_path, save_path, device='cuda' if torch.cuda.is_available() else 'cpu'):
+        self.device = device
+        self.model = UNET(in_channels=3, out_channels=1).to(self.device)
+        load_checkpoint(torch.load(model_path, map_location=self.device), self.model)
+        self.model.eval()
+        self.save_path = save_path
+        self.transforms = A.Compose([
+            A.Resize(height=720, width=720),
+            A.Normalize(mean=[0.0, 0.0, 0.0], std=[1.0, 1.0, 1.0], max_pixel_value=255.0),
+            ToTensorV2(),
+        ])
 
-IMAGE_HEIGHT = 720
-IMAGE_WIDTH = 720
-DOORSTEP = 0.2
+    def find_endpoints(self, skeleton):
+        endpoints = []
+        height, width = skeleton.shape
+        for y in range(1, height - 1):
+            for x in range(1, width - 1):
+                if skeleton[y, x] == 255:
+                    neighbors = sum(skeleton[y + dy, x + dx] == 255 for dy in [-1, 0, 1] for dx in [-1, 0, 1] if not (dy == 0 and dx == 0))
+                    if neighbors == 1:
+                        endpoints.append((x, y))
+        print(f"Найдено конечных точек: {len(endpoints)}")
+        return endpoints
 
-MODEL_NUM = '46'
-MODEL_PATH = f"saved_models/my_checkpoint_{MODEL_NUM}.pth.tar"
-SAVE_PATH = 'algo_results/'
-
-model = UNET(in_channels=3, out_channels=1).to(DEVICE)
-load_checkpoint(torch.load(MODEL_PATH, map_location=DEVICE), model)
-model.eval()
-
-transforms = A.Compose([
-    A.Resize(height=IMAGE_HEIGHT, width=IMAGE_WIDTH),
-    A.Normalize(mean=[0.0, 0.0, 0.0], std=[1.0, 1.0, 1.0], max_pixel_value=255.0),
-    ToTensorV2(),
-])
-
-def find_endpoints(skeleton):
-    """Находит конечные точки скелета."""
-    endpoints = []
-    height, width = skeleton.shape
-
-    for y in range(1, height - 1):
-        for x in range(1, width - 1):
-            if skeleton[y, x] == 255:
-                # Считаем количество соседей
-                neighbors = 0
-                for dy in [-1, 0, 1]:
-                    for dx in [-1, 0, 1]:
-                        if dy == 0 and dx == 0:
-                            continue  # Пропускаем текущий пиксель
-                        if skeleton[y + dy, x + dx] == 255:
-                            neighbors += 1
-                # Если только один сосед, это конечная точка
-                if neighbors == 1:
-                    endpoints.append((x, y))
-
-    print(f"Найдено конечных точек: {len(endpoints)}")
-
-    return endpoints
-
-def find_center_point(skeleton):
-    """Находит точку скелета с наибольшим количеством соседей. Если таких точек несколько, вычисляет их центр масс."""
-    height, width = skeleton.shape
-    max_neighbors = -1
-    candidate_points = []  # Точки с максимальным количеством соседей
-
-    # Проходим по каждому пикселю скелета
-    for y in range(1, height - 1):
-        for x in range(1, width - 1):
-            if skeleton[y, x] == 255:  # Если это пиксель скелета
-                # Считаем количество соседей
-                neighbors = 0
-                for dy in [-1, 0, 1]:
-                    for dx in [-1, 0, 1]:
-                        if dy == 0 and dx == 0:
-                            continue  # Пропускаем текущий пиксель
-                        if skeleton[y + dy, x + dx] == 255:
-                            neighbors += 1
-
-                # Если количество соседей больше текущего максимума
-                if neighbors > max_neighbors:
-                    max_neighbors = neighbors
-                    candidate_points = [(x, y)]  # Начинаем новый список
-                elif neighbors == max_neighbors:
-                    candidate_points.append((x, y))  # Добавляем точку в список
-
-    # Если найдены точки с максимальным количеством соседей
-    if candidate_points:
-        # Вычисляем центр масс всех кандидатов
-        x_coords = [point[0] for point in candidate_points]
-        y_coords = [point[1] for point in candidate_points]
-        center_x = int(np.mean(x_coords))
-        center_y = int(np.mean(y_coords))
-        return (center_x, center_y)
-    else:
-        return None  # Если точек не найдено
-
-def find_skeleton_center(endpoints):
-    """Находит центр масс скелета относительно всех конечных точек."""
-    if not endpoints:
+    def find_center_point(self, skeleton):
+        height, width = skeleton.shape
+        max_neighbors = -1
+        candidate_points = []
+        for y in range(1, height - 1):
+            for x in range(1, width - 1):
+                if skeleton[y, x] == 255:
+                    neighbors = sum(skeleton[y + dy, x + dx] == 255 for dy in [-1, 0, 1] for dx in [-1, 0, 1] if not (dy == 0 and dx == 0))
+                    if neighbors > max_neighbors:
+                        max_neighbors = neighbors
+                        candidate_points = [(x, y)]
+                    elif neighbors == max_neighbors:
+                        candidate_points.append((x, y))
+        if candidate_points:
+            center_x = int(np.mean([point[0] for point in candidate_points]))
+            center_y = int(np.mean([point[1] for point in candidate_points]))
+            return (center_x, center_y)
         return None
 
-    x_coords = [point[0] for point in endpoints]
-    y_coords = [point[1] for point in endpoints]
-    center_x = int(np.mean(x_coords))
-    center_y = int(np.mean(y_coords))
+    def overlay_mask(self, image, mask, color=(0, 0, 255), alpha=0.5):
+        """
+        Наложение маски на изображение с заданным цветом и прозрачностью.
+        """
+        mask = mask.astype(np.uint8)
+        colored_mask = np.zeros_like(image)
+        colored_mask[mask == 255] = color
+        result = image.copy()
+        result[mask == 255] = cv2.addWeighted(image[mask == 255], 1 - alpha, colored_mask[mask == 255], alpha, 0)
+        return result
 
-    return (center_x, center_y)
+    def find_brightest_point(self, image, mask):
+        """Находит самую яркую точку внутри маски."""
+        masked_image = cv2.bitwise_and(image, image, mask=mask)
+        gray_image = cv2.cvtColor(masked_image, cv2.COLOR_BGR2GRAY)
+        _, max_val, _, max_loc = cv2.minMaxLoc(gray_image)
+        return max_loc  # (x, y)
 
-def process_image(image_path, output_path='draft_out.png'):
+    def region_growing(self, image, mask, tolerance=10):
+        """Выполняет Region Growing, начиная с самой яркой точки внутри маски."""
+        brightest_point = self.find_brightest_point(image, mask)
+        print(f"Самая яркая точка: {brightest_point}")
+        gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        filled_image = flood_fill(gray_image, (brightest_point[1], brightest_point[0]), new_value=255, tolerance=tolerance)
+        region_mask = (filled_image == 255).astype(np.uint8) * 255
+        return region_mask
 
-    image = Image.open(image_path).convert("RGB")
-    original_size = image.size
-    image = np.array(image)
-    image_np = image.copy()
+    def process_image(self, image_path, index):
+        # Загрузка и преобразование изображения
+        image = Image.open(image_path).convert("RGB")
+        original_size = image.size
+        image_np = np.array(image)
+        transformed = self.transforms(image=image_np)
+        image_tensor = transformed["image"].unsqueeze(0).to(self.device)
 
-    transformed = transforms(image=image)
-    image_tensor = transformed["image"].unsqueeze(0).to(DEVICE)
+        # Получение маски от модели
+        with torch.no_grad():
+            output = self.model(image_tensor)
+            output = torch.sigmoid(output)
+            output = (output > 0.2).float()
 
-    with torch.no_grad():
-        output = model(image_tensor)
-        output = torch.sigmoid(output)
-        output = (output > DOORSTEP).float()
+        output_image = output.squeeze().cpu().numpy()
+        output_image = (output_image * 255).astype(np.uint8)
+        output_image = cv2.resize(output_image, original_size, interpolation=cv2.INTER_NEAREST)
 
-    output_image = output.squeeze().cpu().numpy()
-    output_image = (output_image * 255).astype(np.uint8)
+        # Постобработка маски
+        _, mask = cv2.threshold(output_image, 127, 255, cv2.THRESH_OTSU)
+        kernel = np.ones((3, 3), np.uint8)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=2)
 
-    output_image = cv2.resize(output_image, original_size, interpolation=cv2.INTER_NEAREST)
+        # Фильтрация маски
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        filtered_mask = np.zeros_like(mask)
+        if contours:
+            max_contour = max(contours, key=cv2.contourArea)
+            cv2.drawContours(filtered_mask, [max_contour], -1, 255, thickness=cv2.FILLED)
 
-    _, mask = cv2.threshold(output_image, 127, 255, cv2.THRESH_OTSU)
-    kernel = np.ones((3, 3), np.uint8)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=2)
+        # Уточнение маски через Region Growing
+        refined_mask = self.region_growing(cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR), filtered_mask, tolerance=50)
 
-    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    filtered_mask = np.zeros_like(mask)
-    if contours:
-        max_contour = max(contours, key=cv2.contourArea)
-        cv2.drawContours(filtered_mask, [max_contour], -1, 255, thickness=cv2.FILLED)
+        # Скелетизация
+        skeleton = morphology.skeletonize(refined_mask // 255, method='lee')
+        skeleton = (skeleton * 255).astype(np.uint8)
 
-    result = filtered_mask
+        # Нахождение конечных точек и центра
+        endpoints = self.find_endpoints(skeleton)
+        center_point = self.find_center_point(skeleton)
 
-    # Разделение тела и ветвей
-    image_gray = result
-    _, binary_image = cv2.threshold(image_gray, 127, 255, cv2.THRESH_OTSU)
-    binary_image = cv2.dilate(binary_image, np.ones((5, 5), np.uint8), iterations=1)
-    binary_image = cv2.erode(binary_image, np.ones((3, 3), np.uint8), iterations=1)
+        # Разделение на тело и ветви
+        skeleton_pixels = np.argwhere(skeleton == 255)
+        if center_point:
+            distances = np.linalg.norm(skeleton_pixels - np.array(center_point[::-1]), axis=1)
+            threshold_radius = np.percentile(distances, 35)
+            body_pixels = skeleton_pixels[distances <= threshold_radius]
+            branch_pixels = skeleton_pixels[distances > threshold_radius]
+        else:
+            body_pixels = []
+            branch_pixels = []
 
-    # Скелетизация
-    skeleton = morphology.skeletonize(binary_image // 255)
-    skeleton = (skeleton * 255).astype(np.uint8)  # Преобразуем в формат для OpenCV
+        # Отрисовка результата
+        result_image = image_np.copy()
+        for pixel in body_pixels:
+            result_image[pixel[0], pixel[1]] = [255, 0, 0]  # Красный (тело)
+        for pixel in branch_pixels:
+            result_image[pixel[0], pixel[1]] = [0, 255, 0]  # Зеленый (ветви)
+        if center_point:
+            cv2.circle(result_image, center_point, radius=3, color=(255, 255, 0), thickness=-1)  # Желтый (центр)
+        if endpoints:
+            for endpoint in endpoints:
+                cv2.circle(result_image, endpoint, radius=3, color=(0, 255, 255), thickness=-1)  # Голубой (конечные точки)
 
-    # Нахождение конечных точек скелета
-    endpoints = find_endpoints(skeleton)
+        # Сохранение и отображение изображений
+        self.display_images(
+            original=image_np,
+            model_mask=self.overlay_mask(image_np, mask=output_image),
+            filtered_mask=self.overlay_mask(image_np, mask=filtered_mask),
+            refined_mask=self.overlay_mask(image_np, mask=refined_mask),
+            result_image=result_image
+        )
+        self.save_images(
+            original=image_np,
+            model_mask=self.overlay_mask(image_np, mask=output_image),
+            filtered_mask=self.overlay_mask(image_np, mask=filtered_mask),
+            refined_mask=self.overlay_mask(image_np, mask=refined_mask),
+            result_image=result_image,
+            index=index
+        )
 
-    # Нахождение центра скелета (точки, где ветви сходятся)
-    center_point = find_center_point(skeleton)
+    def display_images(self, original, model_mask, filtered_mask, refined_mask, result_image):
+        """Отображение всех изображений."""
+        fig, axes = plt.subplots(1, 5, figsize=(20, 5))
+        axes[0].imshow(cv2.cvtColor(original, cv2.COLOR_RGB2BGR))
+        axes[0].set_title("Original Image")
+        axes[0].axis("off")
 
-    # Разделение по радиусу
-    skeleton_pixels = np.argwhere(skeleton == 255)
-    if center_point:
-        distances = np.linalg.norm(skeleton_pixels - np.array(center_point[::-1]), axis=1)
-        threshold_radius = np.percentile(distances, 35)
-        body_pixels = skeleton_pixels[distances <= threshold_radius]
-        branch_pixels = skeleton_pixels[distances > threshold_radius]
-    else:
-        body_pixels = []
-        branch_pixels = []
+        axes[1].imshow(model_mask, cmap='gray')
+        axes[1].set_title("Model Mask")
+        axes[1].axis("off")
 
-    # Окрашивание на исходном изображении
-    for pixel in body_pixels:
-        image_np[pixel[0], pixel[1]] = [255, 0, 0]  # Красный (тело)
-    for pixel in branch_pixels:
-        image_np[pixel[0], pixel[1]] = [0, 255, 0]  # Зеленый (ветви)
-    if center_point:
-        cv2.circle(image_np, center_point, radius=3, color=(255, 255, 0), thickness=-1)
-    if endpoints:
-        for endpoint in endpoints:
-            cv2.circle(image_np, endpoint, radius=3, color=(0, 255, 255), thickness=-1)
+        axes[2].imshow(filtered_mask, cmap='gray')
+        axes[2].set_title("Filtered Mask")
+        axes[2].axis("off")
 
-    cv2.imwrite(output_path, cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR))
+        axes[3].imshow(refined_mask, cmap='gray')
+        axes[3].set_title("Refined Mask (Region Growing)")
+        axes[3].axis("off")
 
+        axes[4].imshow(cv2.cvtColor(result_image, cv2.COLOR_RGB2BGR))
+        axes[4].set_title("Result with Skeleton and Points")
+        axes[4].axis("off")
 
+        plt.show()
+
+    def save_images(self, original, model_mask, filtered_mask, refined_mask, result_image, index=0):
+        """Сохранение всех изображений."""
+        cv2.imwrite(os.path.join(self.save_path, f"original_image_{index}.png"), cv2.cvtColor(original, cv2.COLOR_RGB2BGR))
+        cv2.imwrite(os.path.join(self.save_path, f"model_mask_{index}.png"), model_mask)
+        cv2.imwrite(os.path.join(self.save_path, f"filtered_mask_{index}.png"), filtered_mask)
+        cv2.imwrite(os.path.join(self.save_path, f"refined_mask_{index}.png"), refined_mask)
+        cv2.imwrite(os.path.join(self.save_path, f"result_image_{index}.png"), cv2.cvtColor(result_image, cv2.COLOR_RGB2BGR))
 
 if __name__ == '__main__':
+    processor = ImageProcessor(model_path="saved_models/my_checkpoint_46.pth.tar", save_path="algo_results/")
     input_dir = "data/val_images/"
+    index = 0
     for root, _, files in os.walk(input_dir):
         for file in files:
             input_path = os.path.join(root, file)
-            try:
-                process_image(input_path, output_path=SAVE_PATH + file)
-            except Exception as e:
-                print(e)
+            processor.process_image(input_path, index)
+            index += 1
