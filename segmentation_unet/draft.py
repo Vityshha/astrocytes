@@ -76,7 +76,6 @@ class ImageProcessor:
     def region_growing(self, image, mask, tolerance=10):
         """Выполняет Region Growing, начиная с самой яркой точки внутри маски."""
         brightest_point = self.find_brightest_point(image, mask)
-        print(f"Самая яркая точка: {brightest_point}")
         gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         filled_image = flood_fill(gray_image, (brightest_point[1], brightest_point[0]), new_value=255, tolerance=tolerance)
         region_mask = (filled_image == 255).astype(np.uint8) * 255
@@ -107,7 +106,7 @@ class ImageProcessor:
 
         return body_pixels, branch_pixels
 
-    def process_image(self, image_path, index):
+    def process_image(self, image_path, tolerance, index):
         # Загрузка и преобразование изображения
         image = Image.open(image_path).convert("RGB")
         original_size = image.size
@@ -160,7 +159,7 @@ class ImageProcessor:
             cv2.drawContours(filtered_mask, [max_contour], -1, 255, thickness=cv2.FILLED)
 
         # Уточнение маски через Region Growing
-        refined = self.region_growing(cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR), filtered_mask, tolerance=50)
+        refined = self.region_growing(cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR), filtered_mask, tolerance=tolerance)
 
         contours, hierarchy = cv2.findContours(refined, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
         max_contour_mask = np.zeros_like(refined)
@@ -276,11 +275,12 @@ if __name__ == '__main__':
     processor = ImageProcessor(model_path="saved_models/my_checkpoint_46.pth.tar", save_path="algo_results/")
     input_dir = "data/val_images/"
     index = 0
+    tolerance = 50
     for root, _, files in os.walk(input_dir):
         for file in files:
             input_path = os.path.join(root, file)
             # try:
-            processor.process_image(input_path, index)
+            processor.process_image(input_path, tolerance, index)
             index += 1
             # except:
             #     pass
