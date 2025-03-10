@@ -82,6 +82,31 @@ class ImageProcessor:
         region_mask = (filled_image == 255).astype(np.uint8) * 255
         return region_mask
 
+    def check_neighborhood(self, skeleton_pixels, main_body_astrocytes, body_pixels, branch_pixels, max_distance=0):
+        """
+        Проверяет пиксели с учетом диапазона в плюс-минус max_distance пикселей,
+        и добавляет их в body_pixels или branch_pixels в зависимости от того, есть ли тело в окрестности.
+        """
+        for pixel in skeleton_pixels:
+            y, x = pixel
+            is_body_pixel = False
+
+            for dy in range(-max_distance, max_distance + 1):
+                for dx in range(-max_distance, max_distance + 1):
+                    ny, nx = y + dy, x + dx
+
+                    if 0 <= ny < main_body_astrocytes.shape[0] and 0 <= nx < main_body_astrocytes.shape[1]:
+                        if main_body_astrocytes[ny, nx] == 255:
+                            is_body_pixel = True
+                            break
+
+            if is_body_pixel:
+                body_pixels.append((y, x))
+            else:
+                branch_pixels.append((y, x))
+
+        return body_pixels, branch_pixels
+
     def process_image(self, image_path, index):
         # Загрузка и преобразование изображения
         image = Image.open(image_path).convert("RGB")
@@ -154,7 +179,7 @@ class ImageProcessor:
                     cv2.drawContours(max_contour_mask, [cnt], -1, 0, thickness=cv2.FILLED)
         refined_mask = max_contour_mask
 
-        # TODO выделяем основное тело астроцита: 2 разных метода
+        # TODO выделяем основное тело астроцита
         kernel_size = 15
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
         opened = cv2.morphologyEx(refined_mask, cv2.MORPH_OPEN, kernel, iterations=3)
@@ -172,33 +197,15 @@ class ImageProcessor:
 
         # Нахождение конечных точек и центра
         endpoints = self.find_endpoints(skeleton)
-        center_point = self.find_center_point(skeleton)
+        # center_point = self.find_center_point(skeleton) # todo мб пригодится
 
-        # Разделение на тело и ветви
+        # Разделение на тело и ветви на основе main_body_astrocytes
         skeleton_pixels = np.argwhere(skeleton == 255)
 
-        # if False:
-        #     if center_point:
-        #         distances = np.linalg.norm(skeleton_pixels - np.array(center_point[::-1]), axis=1)
-        #         threshold_radius = np.percentile(distances, 35)
-        #         body_pixels = skeleton_pixels[distances <= threshold_radius]
-        #         branch_pixels = skeleton_pixels[distances > threshold_radius]
-        #     else:
-        #         body_pixels = []
-        #         branch_pixels = []
-        # else:
-        # разделение на тело и отростки на основе main_body_astrocytes
         body_pixels = []
         branch_pixels = []
 
-        for pixel in skeleton_pixels:
-            y, x = pixel
-            if main_body_astrocytes[y, x] == 255:
-                body_pixels.append(pixel)
-            else:
-                branch_pixels.append(pixel)
-        body_pixels = np.array(body_pixels)
-        branch_pixels = np.array(branch_pixels)
+        body_pixels, branch_pixels = self.check_neighborhood(skeleton_pixels, main_body_astrocytes, body_pixels, branch_pixels, max_distance=0)
 
         # Отрисовка результата
         result_image = image_np_origin.copy()
@@ -206,8 +213,6 @@ class ImageProcessor:
             result_image[pixel[0], pixel[1]] = [255, 0, 0]  # Красный (тело)
         for pixel in branch_pixels:
             result_image[pixel[0], pixel[1]] = [0, 255, 0]  # Зеленый (ветви)
-        if center_point:
-            cv2.circle(result_image, center_point, radius=3, color=(255, 255, 0), thickness=-1)  # Желтый (центр)
         if endpoints:
             for endpoint in endpoints:
                 cv2.circle(result_image, endpoint, radius=3, color=(0, 255, 255), thickness=-1)  # Голубой (конечные точки)
