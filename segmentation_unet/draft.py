@@ -88,6 +88,8 @@ class ImageProcessor:
         original_size = image.size
         image_np = np.array(image)
 
+        image_np_origin = np.copy(image_np)
+
         # Повышение контрастности и сглаживание
         # todo вынести в обработку
         # 1. Контрастирование
@@ -101,7 +103,7 @@ class ImageProcessor:
         # 3. Сглаживание (гауссово размытие)
         image_np = cv2.GaussianBlur(image_np, (5, 5), sigmaX=1.5)
         # 4. Гамма-коррекция для увеличения яркости ярких областей
-        gamma = 1.5
+        gamma = 1.2
         inv_gamma = 1.0 / gamma
         table = np.array([((i / 255.0) ** inv_gamma) * 255 for i in np.arange(0, 256)]).astype("uint8")
         image_np = cv2.LUT(image_np, table)
@@ -199,7 +201,7 @@ class ImageProcessor:
         branch_pixels = np.array(branch_pixels)
 
         # Отрисовка результата
-        result_image = image_np.copy()
+        result_image = image_np_origin.copy()
         for pixel in body_pixels:
             result_image[pixel[0], pixel[1]] = [255, 0, 0]  # Красный (тело)
         for pixel in branch_pixels:
@@ -212,19 +214,18 @@ class ImageProcessor:
 
 
         # Сохранение и отображение изображений
-
         # self.display_images(
-        #     original=image_np,
-        #     model_mask=self.overlay_mask(image_np, mask=output_image),
-        #     filtered_mask=self.overlay_mask(image_np, mask=filtered_mask),
-        #     refined_mask=self.overlay_mask(image_np, mask=refined_mask),
+        #     original=image_np_origin,
+        #     model_mask=self.overlay_mask(image_np_origin, mask=output_image),
+        #     filtered_mask=self.overlay_mask(image_np_origin, mask=filtered_mask),
+        #     refined_mask=self.overlay_mask(image_np_origin, mask=refined_mask),
         #     result_image=result_image
         # )
         self.save_images(
-            original=image_np,
-            model_mask=self.overlay_mask(image_np, mask=output_image),
-            filtered_mask=self.overlay_mask(image_np, mask=filtered_mask),
-            refined_mask=self.overlay_mask(image_np, mask=refined_mask),
+            original=image_np_origin,
+            model_mask=self.overlay_mask(image_np_origin, mask=output_image),
+            filtered_mask=self.overlay_mask(image_np_origin, mask=filtered_mask),
+            refined_mask=self.overlay_mask(image_np_origin, mask=refined_mask),
             result_image=result_image,
             index=index
         )
