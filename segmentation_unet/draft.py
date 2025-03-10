@@ -119,7 +119,7 @@ class ImageProcessor:
         # todo вынести в обработку
         # 1. Контрастирование
         image_np = cv2.normalize(image_np, None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX)
-        # 2. Гистограммная эквализация (для каждого канала)
+        # 2. Гистограммная эквализация
         image_np = cv2.cvtColor(image_np, cv2.COLOR_RGB2YCrCb)
         channels = list(cv2.split(image_np))
         channels[0] = cv2.equalizeHist(channels[0])
@@ -178,6 +178,10 @@ class ImageProcessor:
                 if hierarchy[0][i][3] == max_contour_index:
                     cv2.drawContours(max_contour_mask, [cnt], -1, 0, thickness=cv2.FILLED)
         refined_mask = max_contour_mask
+
+        # чтобы не было маленьких пузырьков (петель при построении скелета)
+        kernel = np.ones((3, 3), np.uint8)
+        refined_mask = cv2.morphologyEx(refined_mask, cv2.MORPH_CLOSE, kernel, iterations=3)
 
         # TODO выделяем основное тело астроцита
         kernel_size = 15
