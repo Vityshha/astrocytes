@@ -25,6 +25,7 @@ class ImageProcessor:
         ])
 
     def find_endpoints(self, skeleton):
+        """Находит конечные точки на скелете."""
         endpoints = []
         height, width = skeleton.shape
         for y in range(1, height - 1):
@@ -37,6 +38,7 @@ class ImageProcessor:
         return endpoints
 
     def find_center_point(self, skeleton):
+        """Находит центральную точку на скелете."""
         height, width = skeleton.shape
         max_neighbors = -1
         candidate_points = []
@@ -56,9 +58,7 @@ class ImageProcessor:
         return None
 
     def overlay_mask(self, image, mask, color=(0, 0, 255), alpha=0.5):
-        """
-        Наложение маски на изображение с заданным цветом и прозрачностью.
-        """
+        """Наложение маски на изображение с заданным цветом и прозрачностью."""
         mask = mask.astype(np.uint8)
         colored_mask = np.zeros_like(image)
         colored_mask[mask == 255] = color
@@ -71,7 +71,7 @@ class ImageProcessor:
         masked_image = cv2.bitwise_and(image, image, mask=mask)
         gray_image = cv2.cvtColor(masked_image, cv2.COLOR_BGR2GRAY)
         _, max_val, _, max_loc = cv2.minMaxLoc(gray_image)
-        return max_loc  # (x, y)
+        return max_loc
 
     def region_growing(self, image, mask, tolerance=10):
         """Выполняет Region Growing, начиная с самой яркой точки внутри маски."""
@@ -83,7 +83,7 @@ class ImageProcessor:
 
     def check_neighborhood(self, skeleton_pixels, main_body_astrocytes, body_pixels, branch_pixels, max_distance=0):
         """
-        Проверяет пиксели с учетом диапазона в плюс-минус max_distance пикселей,
+        Проверяет пиксели с учетом диапазона в диапазоне max_distance пикселей,
         и добавляет их в body_pixels или branch_pixels в зависимости от того, есть ли тело в окрестности.
         """
         for pixel in skeleton_pixels:
@@ -106,61 +106,36 @@ class ImageProcessor:
 
         return body_pixels, branch_pixels
 
-    def process_image(self, image_path, tolerance, index):
-        # Загрузка и преобразование изображения
-        image = Image.open(image_path).convert("RGB")
-        original_size = image.size
-        image_np = np.array(image)
-
-        image_np_origin = np.copy(image_np)
-
-        # Повышение контрастности и сглаживание
-        # todo вынести в обработку
-        # 1. Контрастирование
+    def preprocess_image(self, image_np):
+        """Предобработка изображения: контрастирование, эквализация гистограммы, сглаживание, гамма-коррекция."""
         image_np = cv2.normalize(image_np, None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX)
-        # 2. Гистограммная эквализация
         image_np = cv2.cvtColor(image_np, cv2.COLOR_RGB2YCrCb)
         channels = list(cv2.split(image_np))
         channels[0] = cv2.equalizeHist(channels[0])
         image_np = cv2.merge(channels)
         image_np = cv2.cvtColor(image_np, cv2.COLOR_YCrCb2RGB)
-        # 3. Сглаживание (гауссово размытие)
         image_np = cv2.GaussianBlur(image_np, (5, 5), sigmaX=1.5)
-        # 4. Гамма-коррекция для увеличения яркости ярких областей
         gamma = 1.2
         inv_gamma = 1.0 / gamma
         table = np.array([((i / 255.0) ** inv_gamma) * 255 for i in np.arange(0, 256)]).astype("uint8")
         image_np = cv2.LUT(image_np, table)
+        return image_np
 
-        transformed = self.transforms(image=image_np)
-        image_tensor = transformed["image"].unsqueeze(0).to(self.device)
-
-        # Получение маски от модели
-        with torch.no_grad():
-            output = self.model(image_tensor)
-            output = torch.sigmoid(output)
-            output = (output > 0.2).float()
-
-        output_image = output.squeeze().cpu().numpy()
-        output_image = (output_image * 255).astype(np.uint8)
-        output_image = cv2.resize(output_image, original_size, interpolation=cv2.INTER_NEAREST)
-
-        # Постобработка маски
-        # todo разделить дальше и вынести в отдельные методы
-        _, mask = cv2.threshold(output_image, 127, 255, cv2.THRESH_OTSU)
+    def postprocess_mask(self, mask):
+        """Постобработка маски: морфологические операции и фильтрация контуров."""
+        _, mask = cv2.threshold(mask, 127, 255, cv2.THRESH_OTSU)
         kernel = np.ones((3, 3), np.uint8)
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=2)
-
-        # Фильтрация маски
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         filtered_mask = np.zeros_like(mask)
         if contours:
             max_contour = max(contours, key=cv2.contourArea)
             cv2.drawContours(filtered_mask, [max_contour], -1, 255, thickness=cv2.FILLED)
+        return filtered_mask
 
-        # Уточнение маски через Region Growing
+    def refine_mask(self, image_np, filtered_mask, tolerance):
+        """Уточнение маски через Region Growing."""
         refined = self.region_growing(cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR), filtered_mask, tolerance=tolerance)
-
         contours, hierarchy = cv2.findContours(refined, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
         max_contour_mask = np.zeros_like(refined)
         if contours:
@@ -177,40 +152,60 @@ class ImageProcessor:
                 if hierarchy[0][i][3] == max_contour_index:
                     cv2.drawContours(max_contour_mask, [cnt], -1, 0, thickness=cv2.FILLED)
         refined_mask = max_contour_mask
-
-        # чтобы не было маленьких пузырьков (петель при построении скелета)
         kernel = np.ones((3, 3), np.uint8)
         refined_mask = cv2.morphologyEx(refined_mask, cv2.MORPH_CLOSE, kernel, iterations=3)
+        return refined_mask
 
-        # TODO выделяем основное тело астроцита
+    def extract_main_body(self, refined_mask):
+        """Извлечение основного тела астроцита."""
         kernel_size = 15
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
         opened = cv2.morphologyEx(refined_mask, cv2.MORPH_OPEN, kernel, iterations=3)
         main_body = cv2.morphologyEx(opened, cv2.MORPH_DILATE, kernel, iterations=1)
-
         contours, _ = cv2.findContours(main_body, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         main_body_astrocytes = np.zeros_like(main_body)
         if contours:
             max_contour = max(contours, key=cv2.contourArea)
             cv2.drawContours(main_body_astrocytes, [max_contour], -1, 255, thickness=cv2.FILLED)
+        return main_body_astrocytes
 
-        # Скелетизация
+    def process_image(self, image_path, tolerance, index):
+        """Основной метод обработки изображения."""
+        image = Image.open(image_path).convert("RGB")
+        original_size = image.size
+        image_np = np.array(image)
+        image_np_origin = np.copy(image_np)
+
+        image_np = self.preprocess_image(image_np)
+
+        transformed = self.transforms(image=image_np)
+        image_tensor = transformed["image"].unsqueeze(0).to(self.device)
+
+        with torch.no_grad():
+            output = self.model(image_tensor)
+            output = torch.sigmoid(output)
+            output = (output > 0.2).float()
+
+        output_image = output.squeeze().cpu().numpy()
+        output_image = (output_image * 255).astype(np.uint8)
+        output_image = cv2.resize(output_image, original_size, interpolation=cv2.INTER_NEAREST)
+
+        filtered_mask = self.postprocess_mask(output_image)
+
+        refined_mask = self.refine_mask(image_np, filtered_mask, tolerance)
+
+        main_body_astrocytes = self.extract_main_body(refined_mask)
+
         skeleton = morphology.skeletonize(refined_mask // 255, method='lee')
         skeleton = (skeleton * 255).astype(np.uint8)
 
-        # Нахождение конечных точек и центра
         endpoints = self.find_endpoints(skeleton)
-        # center_point = self.find_center_point(skeleton) # todo мб пригодится
 
-        # Разделение на тело и ветви на основе main_body_astrocytes
         skeleton_pixels = np.argwhere(skeleton == 255)
-
         body_pixels = []
         branch_pixels = []
-
         body_pixels, branch_pixels = self.check_neighborhood(skeleton_pixels, main_body_astrocytes, body_pixels, branch_pixels, max_distance=0)
 
-        # Отрисовка результата
         result_image = image_np_origin.copy()
         for pixel in body_pixels:
             result_image[pixel[0], pixel[1]] = [255, 0, 0]  # Красный (тело)
@@ -220,15 +215,6 @@ class ImageProcessor:
             for endpoint in endpoints:
                 cv2.circle(result_image, endpoint, radius=3, color=(0, 255, 255), thickness=-1)  # Голубой (конечные точки)
 
-
-        # Сохранение и отображение изображений
-        # self.display_images(
-        #     original=image_np_origin,
-        #     model_mask=self.overlay_mask(image_np_origin, mask=output_image),
-        #     filtered_mask=self.overlay_mask(image_np_origin, mask=filtered_mask),
-        #     refined_mask=self.overlay_mask(image_np_origin, mask=refined_mask),
-        #     result_image=result_image
-        # )
         self.save_images(
             original=image_np_origin,
             model_mask=self.overlay_mask(image_np_origin, mask=output_image),
@@ -279,8 +265,5 @@ if __name__ == '__main__':
     for root, _, files in os.walk(input_dir):
         for file in files:
             input_path = os.path.join(root, file)
-            # try:
             processor.process_image(input_path, tolerance, index)
             index += 1
-            # except:
-            #     pass
