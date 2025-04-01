@@ -11,6 +11,7 @@ from utils import load_checkpoint
 from albumentations.pytorch import ToTensorV2
 from skimage.segmentation import flood_fill
 
+
 class ImageProcessor:
     def __init__(self, model_path, save_path, device='cuda' if torch.cuda.is_available() else 'cpu'):
         self.device = device
@@ -31,7 +32,8 @@ class ImageProcessor:
         for y in range(1, height - 1):
             for x in range(1, width - 1):
                 if skeleton[y, x] == 255:
-                    neighbors = sum(skeleton[y + dy, x + dx] == 255 for dy in [-1, 0, 1] for dx in [-1, 0, 1] if not (dy == 0 and dx == 0))
+                    neighbors = sum(skeleton[y + dy, x + dx] == 255 for dy in [-1, 0, 1] for dx in [-1, 0, 1] if
+                                    not (dy == 0 and dx == 0))
                     if neighbors == 1:
                         endpoints.append((x, y))
         print(f"Найдено конечных точек: {len(endpoints)}")
@@ -45,7 +47,8 @@ class ImageProcessor:
         for y in range(1, height - 1):
             for x in range(1, width - 1):
                 if skeleton[y, x] == 255:
-                    neighbors = sum(skeleton[y + dy, x + dx] == 255 for dy in [-1, 0, 1] for dx in [-1, 0, 1] if not (dy == 0 and dx == 0))
+                    neighbors = sum(skeleton[y + dy, x + dx] == 255 for dy in [-1, 0, 1] for dx in [-1, 0, 1] if
+                                    not (dy == 0 and dx == 0))
                     if neighbors > max_neighbors:
                         max_neighbors = neighbors
                         candidate_points = [(x, y)]
@@ -77,7 +80,8 @@ class ImageProcessor:
         """Выполняет Region Growing, начиная с самой яркой точки внутри маски."""
         brightest_point = self.find_brightest_point(image, mask)
         gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        filled_image = flood_fill(gray_image, (brightest_point[1], brightest_point[0]), new_value=255, tolerance=tolerance)
+        filled_image = flood_fill(gray_image, (brightest_point[1], brightest_point[0]), new_value=255,
+                                  tolerance=tolerance)
         region_mask = (filled_image == 255).astype(np.uint8) * 255
         return region_mask
 
@@ -169,6 +173,79 @@ class ImageProcessor:
             cv2.drawContours(main_body_astrocytes, [max_contour], -1, 255, thickness=cv2.FILLED)
         return main_body_astrocytes
 
+    def find_branch_endpoints(self, branch_pixels, body_pixels, skeleton):
+        """Находит концы ветвей на скелете."""
+        branch_endpoints = []
+        for pixel in branch_pixels:
+            y, x = pixel
+            # Проверяем, есть ли среди соседей пиксель из тела
+            has_body_neighbor = any(
+                (y + dy, x + dx) in body_pixels
+                for dy in [-1, 0, 1]
+                for dx in [-1, 0, 1]
+                if not (dy == 0 and dx == 0)
+            )
+            if has_body_neighbor:
+                branch_endpoints.append((x, y))
+
+        print(f"Найдено концов ветвей: {len(branch_endpoints)}")
+        return branch_endpoints
+
+    def separate_branches(self, branch_pixels, skeleton):
+        """
+        Разделяет ветки на отдельные группы (связные компоненты).
+        Возвращает список веток, где каждая ветка — это список пикселей (y, x).
+        """
+        # Создаем пустое изображение для веток
+        branch_image = np.zeros_like(skeleton, dtype=np.uint8)
+
+        # Заполняем пиксели веток на изображении
+        for pixel in branch_pixels:
+            y, x = pixel
+            branch_image[y, x] = 255  # Помечаем пиксели веток белым цветом
+
+        # Находим связные компоненты
+        num_labels, labels = cv2.connectedComponents(branch_image, connectivity=8)
+
+        # Собираем пиксели каждой ветки в отдельный список
+        branches = []
+        for label in range(1, num_labels):  # Пропускаем фон (label = 0)
+            branch_pixels = np.argwhere(labels == label)  # Получаем пиксели текущей ветки
+            branches.append(branch_pixels.tolist())  # Добавляем в список веток
+
+        print(f"Найдено веток: {len(branches)}")
+        return branches
+
+    def find_endpoints_for_branch(self, branch, skeleton):
+        """
+        Находит количество кончиков (endpoints), которые касаются ветки.
+        Вход:
+            - branch: список пикселей ветки [(y1, x1), (y2, x2), ...].
+            - skeleton: изображение скелета (бинарное, где скелет = 255).
+        Возвращает:
+            - Количество кончиков, касающихся ветки.
+        """
+        endpoints_count = 0
+        height, width = skeleton.shape
+
+        for pixel in branch:
+            y, x = pixel
+            # Проверяем, является ли текущий пиксель кончиком
+            neighbors = 0
+            for dy in [-1, 0, 1]:
+                for dx in [-1, 0, 1]:
+                    if dy == 0 and dx == 0:
+                        continue  # Пропускаем текущий пиксель
+                    ny, nx = y + dy, x + dx
+                    # Проверяем, что координаты не выходят за границы
+                    if 0 <= ny < height and 0 <= nx < width:
+                        if skeleton[ny, nx] == 255:
+                            neighbors += 1
+            if neighbors == 1:  # Если у пикселя только один сосед, это кончик
+                endpoints_count += 1
+
+        return endpoints_count
+
     def process_image(self, image_path, tolerance, index):
         """Основной метод обработки изображения."""
         image = Image.open(image_path).convert("RGB")
@@ -204,7 +281,8 @@ class ImageProcessor:
         skeleton_pixels = np.argwhere(skeleton == 255)
         body_pixels = []
         branch_pixels = []
-        body_pixels, branch_pixels = self.check_neighborhood(skeleton_pixels, main_body_astrocytes, body_pixels, branch_pixels, max_distance=0)
+        body_pixels, branch_pixels = self.check_neighborhood(skeleton_pixels, main_body_astrocytes, body_pixels,
+                                                             branch_pixels, max_distance=0)
 
         result_image = image_np_origin.copy()
         for pixel in body_pixels:
@@ -213,7 +291,28 @@ class ImageProcessor:
             result_image[pixel[0], pixel[1]] = [0, 255, 0]  # Зеленый (ветви)
         if endpoints:
             for endpoint in endpoints:
-                cv2.circle(result_image, endpoint, radius=3, color=(0, 255, 255), thickness=-1)  # Голубой (конечные точки)
+                cv2.circle(result_image, endpoint, radius=3, color=(0, 255, 255),
+                           thickness=-1)  # Голубой (конечные точки)
+
+        branches = self.separate_branches(branch_pixels, skeleton)
+
+        # Итерируемся по каждой ветке
+        for i, branch in enumerate(branches):
+            endpoints_count = self.find_endpoints_for_branch(branch, skeleton)
+            print(f"Количество кончиков для ветки {i + 1}: {endpoints_count}")
+            # Если у ветки нет кончиков, считаем ее телом
+            if endpoints_count == 0:
+                for pixel in branch:
+                    y, x = pixel
+                    result_image[y, x] = [255, 0, 0]  # Перекрашиваем в красный (тело)
+                    body_pixels.append((y, x))  # Добавляем в список пикселей тела
+
+        # Находим концы ветвей
+        # branch_endpoints = self.find_branch_endpoints(branch_pixels, body_pixels, skeleton)
+
+        # Отображаем концы ветвей на изображении
+        # for endpoint in branch_endpoints:
+        # cv2.circle(result_image, endpoint, radius=3, color=(255, 0, 255), thickness=3)  # Фиолетовый (концы ветвей)
 
         self.save_images(
             original=image_np_origin,
@@ -251,19 +350,31 @@ class ImageProcessor:
 
     def save_images(self, original, model_mask, filtered_mask, refined_mask, result_image, index=0):
         """Сохранение всех изображений."""
-        cv2.imwrite(os.path.join(self.save_path, f"original_image_{index}.png"), cv2.cvtColor(original, cv2.COLOR_RGB2BGR))
+        if not os.path.exists(self.save_path):
+            os.makedirs(self.save_path)
+        cv2.imwrite(os.path.join(self.save_path, f"original_image_{index}.png"),
+                    cv2.cvtColor(original, cv2.COLOR_RGB2BGR))
         cv2.imwrite(os.path.join(self.save_path, f"model_mask_{index}.png"), model_mask)
         cv2.imwrite(os.path.join(self.save_path, f"filtered_mask_{index}.png"), filtered_mask)
         cv2.imwrite(os.path.join(self.save_path, f"refined_mask_{index}.png"), refined_mask)
-        cv2.imwrite(os.path.join(self.save_path, f"result_image_{index}.png"), cv2.cvtColor(result_image, cv2.COLOR_RGB2BGR))
+        cv2.imwrite(os.path.join(self.save_path, f"result_image_{index}.png"),
+                    cv2.cvtColor(result_image, cv2.COLOR_RGB2BGR))
+
 
 if __name__ == '__main__':
-    processor = ImageProcessor(model_path="saved_models/my_checkpoint_46.pth.tar", save_path="algo_results/")
-    input_dir = "data/val_images/"
+    input_dir = "data/val_images"
+
+    processor = ImageProcessor(model_path="saved_models/my_checkpoint_46.pth.tar", save_path="algo_results2/")
     index = 0
     tolerance = 50
+
     for root, _, files in os.walk(input_dir):
         for file in files:
+            if not file.lower().endswith(('.png', '.jpg', '.jpeg')):
+                print(f"Файл {file} не является изображением. Пропускаем.")
+                continue
             input_path = os.path.join(root, file)
+            print(f"Обработка изображения: {input_path}")
             processor.process_image(input_path, tolerance, index)
             index += 1
+    print("Обработка завершена.")
