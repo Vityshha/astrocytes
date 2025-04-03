@@ -39,6 +39,8 @@ MANIFEST
 *.tar
 *.safetensors
 *.txt
+*.pth
+*.tif
 
 # Installer logs
 pip-log.txt
@@ -59,7 +61,6 @@ coverage.xml
 .pytest_cache/
 cover/
 
-*.safetensors
 
 # Translations
 *.mo
